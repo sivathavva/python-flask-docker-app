@@ -15,7 +15,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Step 2: Fetch Docker Image Tags
+      # Step 2: Fetch Docker Image Tags Without jq
       - name: Fetch Docker Image Tags
         id: fetch_tags
         run: |
@@ -38,22 +38,36 @@ jobs:
           echo "tags=${TAGS[*]}" >> $GITHUB_ENV
           echo "tag_count=${#TAGS[@]}" >> $GITHUB_ENV
 
-      # Step 3: Delete Old Tags if Count Exceeds 10
-      - name: Delete Old Tags
+      # Step 3: Delete Timestamp-based Old Tags if Count Exceeds 10
+      - name: Delete Timestamp-based Old Tags
         if: env.tag_count > 10
         run: |
           IMAGE="${{ secrets.DOCKER_REPO }}"  # Ensure no spaces around the variable reference
           TAGS=(${{ env.tags }})      # Read tags from the environment
           KEEP=10                     # Number of tags to keep (most recent)
 
-          echo "Deleting older tags..."
+          echo "Deleting older timestamp-based tags..."
 
-          # Loop through all tags except the latest 'KEEP'
-          for ((i=0; i<${#TAGS[@]} - KEEP; i++)); do
-            TAG=${TAGS[$i]}
-            echo "Deleting tag: $TAG"
-            curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
-            "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+          # Loop through all tags and delete timestamp-based tags if count exceeds 10
+          TIMESTAMP_TAGS=()
+          for TAG in "${TAGS[@]}"; do
+            # Match timestamp-based tags using regex (e.g., "yyyyMMdd", "yyyy-MM-dd")
+            if [[ "$TAG" =~ ^[0-9]{8}$ || "$TAG" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              TIMESTAMP_TAGS+=("$TAG")
+            fi
           done
 
-          echo "Old tags deleted successfully."
+          # Delete timestamp-based tags if count exceeds 10
+          if [ ${#TIMESTAMP_TAGS[@]} -gt $KEEP ]; then
+            # Sort tags by descending order (latest first)
+            for ((i=0; i<${#TIMESTAMP_TAGS[@]} - KEEP; i++)); do
+              TAG=${TIMESTAMP_TAGS[$i]}
+              echo "Deleting timestamp tag: $TAG"
+              curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
+              "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+            done
+          else
+            echo "No timestamp tags to delete. Keeping the most recent $KEEP tags."
+          fi
+
+          echo "Timestamp-based old tags deleted successfully."
