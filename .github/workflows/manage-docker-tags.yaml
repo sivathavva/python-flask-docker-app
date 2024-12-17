@@ -1,73 +1,63 @@
-name: Manage Docker Tags
+name: Delete Old Docker Tags if Count > 10
 
 on:
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch: # Trigger manually
 
 jobs:
-  manage-docker-tags:
+  delete_old_tags:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Log in to Docker Hub
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ${{ secrets.REGISTRY_URL }}
 
-      # Step 2: Fetch Docker Image Tags Without jq
-      - name: Fetch Docker Image Tags
-        id: fetch_tags
+      - name: Get All Tags
+        id: tags
         run: |
-          IMAGE="${{ secrets.DOCKER_REPO }}"  # Ensure no spaces around the variable reference
-          TAGS_URL="https://hub.docker.com/v2/repositories/${IMAGE}/tags/"
-          echo "Fetching tags for $IMAGE..."
+          # Fetch the tags for the repository from Docker Hub or a private registry
+          TAGS=$(curl -s https://${{ secrets.REGISTRY_URL }}/v2/${{ secrets.DOCKER_REPO }}/tags/list)
+          # Parse the tag list
+          echo "::set-output name=tags::$TAGS"
 
-          # Initialize variables
-          TAGS=()
-          NEXT_PAGE=$TAGS_URL
-          
-          while [ "$NEXT_PAGE" != "null" ]; do
-            RESPONSE=$(curl -s $NEXT_PAGE)
-            TAGS+=( $(echo "$RESPONSE" | grep -o '"name":"[^"]*' | sed 's/"name":"//') )
-            NEXT_PAGE=$(echo "$RESPONSE" | grep -o '"next":"[^"]*' | sed 's/"next":"//' | sed 's/\\"//g')
-            NEXT_PAGE=${NEXT_PAGE:-null}  # Handle null next page
-          done
-
-          echo "Found ${#TAGS[@]} tags"
-          echo "tags=${TAGS[*]}" >> $GITHUB_ENV
-          echo "tag_count=${#TAGS[@]}" >> $GITHUB_ENV
-
-      # Step 3: Delete Timestamp-based Old Tags if Count Exceeds 10
-      - name: Delete Timestamp-based Old Tags
-        if: env.tag_count > 10
+      - name: Check Tag Count and Delete Old Tags If More Than 10
         run: |
-          IMAGE="${{ secrets.DOCKER_REPO }}"  # Ensure no spaces around the variable reference
-          TAGS=(${{ env.tags }})      # Read tags from the environment
-          KEEP=10                     # Number of tags to keep (most recent)
+          TAGS=${{ steps.tags.outputs.tags }}
+          TAG_LIST=$(echo $TAGS | jq -r '.tags[]')
+          TAG_COUNT=$(echo $TAG_LIST | wc -w)
 
-          echo "Deleting older timestamp-based tags..."
+          echo "Number of tags: $TAG_COUNT"
 
-          # Loop through all tags and delete timestamp-based tags if count exceeds 10
-          TIMESTAMP_TAGS=()
-          for TAG in "${TAGS[@]}"; do
-            # Match timestamp-based tags using regex (e.g., "yyyyMMdd", "yyyy-MM-dd")
-            if [[ "$TAG" =~ ^[0-9]{8}$ || "$TAG" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-              TIMESTAMP_TAGS+=("$TAG")
-            fi
-          done
+          if [ "$TAG_COUNT" -gt 10 ]; then
+            echo "Tag count exceeds 10, proceeding to delete old tags..."
 
-          # Delete timestamp-based tags if count exceeds 10
-          if [ ${#TIMESTAMP_TAGS[@]} -gt $KEEP ]; then
-            # Sort tags by descending order (latest first)
-            for ((i=0; i<${#TIMESTAMP_TAGS[@]} - KEEP; i++)); do
-              TAG=${TIMESTAMP_TAGS[$i]}
-              echo "Deleting timestamp tag: $TAG"
-              curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
-              "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+            # Sort tags by creation date (this assumes tags are ordered by creation date in the registry)
+            TAG_LIST_OLD=$(echo $TAGS | jq -r '.tags | sort_by(.created) | .[:10]')
+
+            # Loop through and delete the oldest tags
+            for TAG in $TAG_LIST_OLD; do
+              echo "Getting digest for $TAG"
+              # Get the digest of the tag
+              DIGEST=$(curl -s --header "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                  https://${{ secrets.REGISTRY_URL }}/v2/${{ secrets.REPO_NAME }}/manifests/$TAG | jq -r '.config.digest')
+
+              if [ "$DIGEST" != "null" ]; then
+                echo "Deleting tag $TAG with digest $DIGEST"
+                # Send DELETE request to remove the tag
+                curl -X DELETE https://${{ secrets.REGISTRY_URL }}/v2/${{ secrets.REPO_NAME }}/manifests/$DIGEST
+              else
+                echo "Tag $TAG not found"
+              fi
             done
           else
-            echo "No timestamp tags to delete. Keeping the most recent $KEEP tags."
+            echo "Tag count is less than or equal to 10, skipping deletion."
           fi
-
-          echo "Timestamp-based old tags deleted successfully."
