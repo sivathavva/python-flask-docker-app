@@ -20,7 +20,7 @@ jobs:
       - name: Fetch and Count Images with Pagination
         run: |
           echo "Fetching all images from the private registry..."
-          REGISTRY_URL="https://my.registry.com/v2/_catalog?n=100"  # Adjust 'n' as per registry limits
+          REGISTRY_URL="https://my.registry.com/v2/_catalog?n=2"  # Adjust 'n' as per registry limits
           REPO_LIST=""
           NEXT_URL=$REGISTRY_URL
           
