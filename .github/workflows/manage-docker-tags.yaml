@@ -1,32 +1,29 @@
-name: Fetch Docker Image Count
+name: Count Docker Images
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger
 
 jobs:
-  fetch-image-count:
+  count-images:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch Tags from Docker Registry
-        id: fetch_tags
+      - name: Login to Docker Registry
         run: |
-          REPO_USER="sivathavva"
-          IMAGE_NAME="python-app"
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login my.registry.com -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-          # Call Docker Hub API to fetch tags
-          TAGS_JSON=$(curl -s "https://registry.hub.docker.com/v2/repositories/${REPO_USER}/${IMAGE_NAME}/tags/")
+      - name: Fetch and Count Images
+        run: |
+          echo "Fetching images from registry..."
+          TOKEN=$(curl -s -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
+            "https://my.registry.com/v2/_catalog" | jq -r '.repositories | length')
           
-          # Parse the tags and count
-          TAG_COUNT=$(echo "$TAGS_JSON" | jq '.results | length')
+          echo "Total number of images in the private registry: $TOKEN"
+          echo "IMAGE_COUNT=$TOKEN" >> $GITHUB_ENV
 
-          # Print and export the tag count
-          echo "Number of tags: $TAG_COUNT"
-          echo "tag_count=$TAG_COUNT" >> $GITHUB_ENV
-
-      - name: Output Image Count
+      - name: Display Image Count
         run: |
-          echo "Docker Image Count: ${{ env.tag_count }}"
+          echo "Total Docker Images: $IMAGE_COUNT"
