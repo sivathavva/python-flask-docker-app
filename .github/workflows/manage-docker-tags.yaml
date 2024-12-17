@@ -1,58 +1,32 @@
-name: Delete Old Docker Tags if Count > 10
+name: Fetch Docker Image Count
 
 on:
-  workflow_dispatch: # Trigger manually
+  workflow_dispatch:
 
 jobs:
-  delete_old_tags:
+  fetch-image-count:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v2
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Get All Tags
-        id: tags
+      - name: Fetch Tags from Docker Registry
+        id: fetch_tags
         run: |
-          # Fetch the tags for the repository from Docker Hub
-          TAGS=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_REPO }}/tags/list)
-          # Parse the tag list
-          echo "::set-output name=tags::$TAGS"
+          REPO_USER="sivathavva"
+          IMAGE_NAME="python-app"
 
-      - name: Check Tag Count and Delete Old Tags If More Than 10
-        run: |
-          TAGS=${{ steps.tags.outputs.tags }}
-          TAG_LIST=$(echo $TAGS | jq -r '.tags[]')
-          TAG_COUNT=$(echo "$TAG_LIST" | wc -w)
-          echo "Number of tags: $TAG_COUNT"
+          # Call Docker Hub API to fetch tags
+          TAGS_JSON=$(curl -s "https://registry.hub.docker.com/v2/repositories/${REPO_USER}/${IMAGE_NAME}/tags/")
           
-          if [ "$TAG_COUNT" -gt 10 ]; then
-            echo "Tag count exceeds 10, proceeding to delete old tags..."
-            
-            # Sort tags by creation date (this assumes tags are ordered by creation date in the registry)
-            TAG_LIST_OLD=$(echo $TAGS | jq -r '.tags | sort_by(.created) | .[:10]')
-            
-            # Loop through and delete the oldest tags
-            for TAG in $TAG_LIST_OLD; do
-              echo "Getting digest for $TAG"
-              # Get the digest of the tag
-              DIGEST=$(curl -s --header "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-                  https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_REPO }}/manifests/$TAG | jq -r '.config.digest')
-              
-              if [ "$DIGEST" != "null" ]; then
-                echo "Deleting tag $TAG with digest $DIGEST"
-                # Send DELETE request to remove the tag
-                curl -X DELETE https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_REPO }}/manifests/$DIGEST
-              else
-                echo "Tag $TAG not found"
-              fi
-            done
-          else
-            echo "Tag count is less than or equal to 10, skipping deletion."
-          fi
+          # Parse the tags and count
+          TAG_COUNT=$(echo "$TAGS_JSON" | jq '.results | length')
+
+          # Print and export the tag count
+          echo "Number of tags: $TAG_COUNT"
+          echo "tag_count=$TAG_COUNT" >> $GITHUB_ENV
+
+      - name: Output Image Count
+        run: |
+          echo "Docker Image Count: ${{ env.tag_count }}"
