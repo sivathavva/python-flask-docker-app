@@ -1,88 +1,49 @@
-name: Docker Registry Image Count
+name: Count Docker Images
 
 on:
-  workflow_dispatch:  # Allow manual triggering
-  schedule:
-    - cron: '0 0 * * *'  # Daily run at midnight
+  workflow_dispatch: # Allows manual trigger
 
 jobs:
   count-images:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Login to Docker Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.DOCKER_REGISTRY_URL }}
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Install Docker Registry API Client
+      - name: Fetch and Count Images with Pagination
         run: |
-          pip install requests
+          echo "Fetching all images from the private registry..."
+          REGISTRY_URL="https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/?page_size=100"  # Adjust 'page_size' as needed
+          REPO_LIST=""
+          NEXT_URL=$REGISTRY_URL
+          
+          while [ -n "$NEXT_URL" ]; do
+            echo "Fetching from: $NEXT_URL"
+            RESPONSE=$(curl -s -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" "$NEXT_URL")
+            REPOS=$(echo "$RESPONSE" | jq -r '.results[].name')
+            REPO_LIST="$REPO_LIST $REPOS"
+            
+            # Check for pagination link
+            LINK_HEADER=$(curl -I -s -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" "$NEXT_URL" | grep -i 'Link:')
+            if [[ "$LINK_HEADER" =~ \<([^>]*)\>\;\ rel=\"next\" ]]; then
+              NEXT_URL=${BASH_REMATCH[1]}
+            else
+              NEXT_URL=""
+            fi
+          done
 
-      - name: Fetch Image Count
-        env:
-          REGISTRY_URL: ${{ secrets.DOCKER_REGISTRY_URL }}
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          # Count total images
+          IMAGE_COUNT=$(echo "$REPO_LIST" | wc -w)
+          echo "Total number of images in the private registry: $IMAGE_COUNT"
+          echo "IMAGE_COUNT=$IMAGE_COUNT" >> $GITHUB_ENV
+
+      - name: Display Image Count
         run: |
-          python3 << EOF
-          import requests
-          import base64
-          import os
-
-          def get_image_count(registry_url, username, password):
-              # Basic authentication
-              auth = f"{username}:{password}"
-              encoded_auth = base64.b64encode(auth.encode()).decode()
-
-              # Catalog endpoint
-              catalog_url = f"{registry_url}/v2/_catalog"
-
-              try:
-                  response = requests.get(
-                      catalog_url, 
-                      headers={
-                          "Authorization": f"Basic {encoded_auth}",
-                          "Accept": "application/json"
-                      }
-                  )
-                  response.raise_for_status()
-
-                  repositories = response.json().get('repositories', [])
-                  print(f"Total Repositories: {len(repositories)}")
-                  print("Repositories:")
-                  for repo in repositories:
-                      # Fetch tags for each repository
-                      tags_url = f"{registry_url}/v2/{repo}/tags/list"
-                      tags_response = requests.get(
-                          tags_url,
-                          headers={
-                              "Authorization": f"Basic {encoded_auth}",
-                              "Accept": "application/json"
-                          }
-                      )
-                      tags_data = tags_response.json()
-                      print(f"  {repo}: {len(tags_data.get('tags', []))} tags")
-
-              except requests.exceptions.RequestException as e:
-                  print(f"Error accessing Docker registry: {e}")
-
-          get_image_count(
-              os.environ['REGISTRY_URL'], 
-              os.environ['DOCKER_USERNAME'], 
-              os.environ['DOCKER_PASSWORD']
-          )
-          EOF
-
-      - name: Slack Notification (Optional)
-        if: success()
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          text: Docker Registry Image Count Report
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+          echo "Total Docker Images: $IMAGE_COUNT"
