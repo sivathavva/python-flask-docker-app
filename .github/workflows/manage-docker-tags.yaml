@@ -1,49 +1,60 @@
-name: Count Docker Images
+name: Manage Docker Tags
 
 on:
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch: # Manual trigger
+  schedule:
+    - cron: "0 0 * * *" # Runs daily at midnight
 
 jobs:
-  count-images:
+  manage-docker-tags:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Fetch and Count Images with Pagination
+      # Step 1: Install jq (JSON Processor) and authenticate Docker Hub
+      - name: Install jq and Authenticate Docker Hub
         run: |
-          echo "Fetching all images from the private registry..."
-          REGISTRY_URL="https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/?page_size=100"  # Adjust 'page_size' as needed
-          REPO_LIST=""
-          NEXT_URL=$REGISTRY_URL
-          
-          while [ -n "$NEXT_URL" ]; do
-            echo "Fetching from: $NEXT_URL"
-            RESPONSE=$(curl -s -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" "$NEXT_URL")
-            REPOS=$(echo "$RESPONSE" | jq -r '.results[].name')
-            REPO_LIST="$REPO_LIST $REPOS"
-            
-            # Check for pagination link
-            LINK_HEADER=$(curl -I -s -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" "$NEXT_URL" | grep -i 'Link:')
-            if [[ "$LINK_HEADER" =~ \<([^>]*)\>\;\ rel=\"next\" ]]; then
-              NEXT_URL=${BASH_REMATCH[1]}
-            else
-              NEXT_URL=""
-            fi
+          sudo apt-get install -y jq
+          echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      # Step 2: Count Tags in Docker Hub
+      - name: Fetch Docker Image Tags
+        id: fetch_tags
+        run: |
+          IMAGE="username/repository" # Replace with your Docker Hub image
+          TAGS_URL="https://hub.docker.com/v2/repositories/${IMAGE}/tags/"
+
+          echo "Fetching tags for $IMAGE..."
+
+          # Paginate and collect all tags
+          TAGS=()
+          NEXT_PAGE=$TAGS_URL
+
+          while [ "$NEXT_PAGE" != "null" ]; do
+            RESPONSE=$(curl -s $NEXT_PAGE)
+            TAGS+=( $(echo $RESPONSE | jq -r '.results[].name') )
+            NEXT_PAGE=$(echo $RESPONSE | jq -r '.next')
           done
 
-          # Count total images
-          IMAGE_COUNT=$(echo "$REPO_LIST" | wc -w)
-          echo "Total number of images in the private registry: $IMAGE_COUNT"
-          echo "IMAGE_COUNT=$IMAGE_COUNT" >> $GITHUB_ENV
+          echo "Found ${#TAGS[@]} tags"
+          echo "tags=${TAGS[*]}" >> $GITHUB_ENV
+          echo "tag_count=${#TAGS[@]}" >> $GITHUB_ENV
 
-      - name: Display Image Count
+      # Step 3: Delete Old Tags if Count Exceeds 10
+      - name: Delete Old Tags
+        if: env.tag_count > 10
         run: |
-          echo "Total Docker Images: $IMAGE_COUNT"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/python-app"
+          TAGS=(${{ env.tags }})
+          KEEP=10 # Number of tags to keep (most recent)
+
+          echo "Deleting older tags..."
+
+          # Loop through all tags except the latest 'KEEP'
+          for ((i=0; i<${#TAGS[@]} - KEEP; i++)); do
+            TAG=${TAGS[$i]}
+            echo "Deleting tag: $TAG"
+            curl -X DELETE -u "${{ secrets.DOCKERHUB_USERNAME }}:${{ secrets.DOCKERHUB_PASSWORD }}" \
+            "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+          done
+
+          echo "Old tags deleted successfully."
