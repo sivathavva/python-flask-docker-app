@@ -1,84 +1,66 @@
-name: Cleanup Old Docker Tags
+name: Manage Docker Tags
 
 on:
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch: # Manual trigger
 
 jobs:
-  cleanup-docker-tags:
+  manage-docker-tags:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      # Step 1: Log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Set up Python environment
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-
-    - name: Install dependencies
-      run: pip install requests
-
-    - name: Cleanup Old Docker Tags
-      env:
-        REGISTRY_URL: ${{ secrets.DOCKER_REGISTRY_URL }}
-        REPO_NAME: ${{ secrets.DOCKER_REPO }}
-        USERNAME: ${{ secrets.DOCKER_USERNAME }}
-        PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      run: |
-        python <<EOF
-        import requests
-        from requests.auth import HTTPBasicAuth
-        import re
-
-        # Configuration from environment variables
-        REGISTRY_URL = "${{ env.REGISTRY_URL }}"
-        REPO_NAME = "${{ env.REPO_NAME }}"
-        USERNAME = "${{ env.USERNAME }}"
-        PASSWORD = "${{ env.PASSWORD }}"
-
-        def list_tags(repo_name):
-            url = f"{REGISTRY_URL}/v2/{repo_name}/tags/list"
-            response = requests.get(url, auth=HTTPBasicAuth(USERNAME, PASSWORD))
-            if response.status_code == 200:
-                return response.json().get("tags", [])
-            else:
-                print(f"Failed to fetch tags: {response.status_code}, {response.text}")
-                return []
-
-        def delete_image(repo_name, digest):
-            manifest_url = f"{REGISTRY_URL}/v2/{repo_name}/manifests/{digest}"
-            headers = {"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
-            manifest_response = requests.head(manifest_url, auth=HTTPBasicAuth(USERNAME, PASSWORD), headers=headers)
-            if manifest_response.status_code == 200:
-                digest_to_delete = manifest_response.headers.get("Docker-Content-Digest")
-                delete_response = requests.delete(
-                    f"{REGISTRY_URL}/v2/{repo_name}/manifests/{digest_to_delete}",
-                    auth=HTTPBasicAuth(USERNAME, PASSWORD),
-                )
-                if delete_response.status_code == 202:
-                    print(f"Successfully deleted image with digest: {digest_to_delete}")
-                else:
-                    print(f"Failed to delete image: {delete_response.status_code}, {delete_response.text}")
-            else:
-                print(f"Failed to fetch manifest for tag {digest}: {manifest_response.status_code}, {manifest_response.text}")
-
-        def clean_old_tags():
-            tags = list_tags(REPO_NAME)
-            if not tags:
-                print("No tags found.")
-                return
-
-            timestamp_tags = [tag for tag in tags if re.search(r'\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}', tag)]
-            timestamp_tags.sort(reverse=True)
-
-            if len(timestamp_tags) > 10:
-                old_tags = timestamp_tags[10:]
-                for old_tag in old_tags:
-                    print(f"Deleting old tag: {old_tag}")
-                    delete_image(REPO_NAME, old_tag)
-            else:
-                print("No tags to delete, count is within the limit.")
-
-        clean_old_tags()
-        EOF
+      # Step 2: Fetch Docker Image Tags Without jq
+      - name: Fetch Docker Image Tags
+        id: fetch_tags
+        run: |
+          IMAGE="${{ secrets.DOCKER_REPO }}"  # Ensure no spaces around the variable reference
+          TAGS_URL="https://hub.docker.com/v2/repositories/${IMAGE}/tags/"
+          echo "Fetching tags for $IMAGE..."
+          # Initialize variables
+          TAGS=()
+          NEXT_PAGE=$TAGS_URL
+          
+          while [ "$NEXT_PAGE" != "null" ]; do
+            RESPONSE=$(curl -s $NEXT_PAGE)
+            TAGS+=( $(echo "$RESPONSE" | grep -o '"name":"[^"]*' | sed 's/"name":"//') )
+            NEXT_PAGE=$(echo "$RESPONSE" | grep -o '"next":"[^"]*' | sed 's/"next":"//' | sed 's/\\"//g')
+            NEXT_PAGE=${NEXT_PAGE:-null}  # Handle null next page
+          done
+          echo "Found ${#TAGS[@]} tags"
+          echo "tags=${TAGS[*]}" >> $GITHUB_ENV
+          echo "tag_count=${#TAGS[@]}" >> $GITHUB_ENV
+      # Step 3: Delete Timestamp-based Old Tags if Count Exceeds 10
+      - name: Delete Timestamp-based Old Tags
+        if: env.tag_count > 10
+        run: |
+          IMAGE="${{ secrets.DOCKER_REPO }}"  # Ensure no spaces around the variable reference
+          TAGS=(${{ env.tags }})      # Read tags from the environment
+          KEEP=10                     # Number of tags to keep (most recent)
+          echo "Deleting older timestamp-based tags..."
+          # Loop through all tags and delete timestamp-based tags if count exceeds 10
+          TIMESTAMP_TAGS=()
+          for TAG in "${TAGS[@]}"; do
+            # Match timestamp-based tags using regex (e.g., "yyyyMMdd", "yyyy-MM-dd")
+            if [[ "$TAG" =~ ^[0-9]{8}$ || "$TAG" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              TIMESTAMP_TAGS+=("$TAG")
+            fi
+          done
+          # Delete timestamp-based tags if count exceeds 10
+          if [ ${#TIMESTAMP_TAGS[@]} -gt $KEEP ]; then
+            # Sort tags by descending order (latest first)
+            for ((i=0; i<${#TIMESTAMP_TAGS[@]} - KEEP; i++)); do
+              TAG=${TIMESTAMP_TAGS[$i]}
+              echo "Deleting timestamp tag: $TAG"
+              curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
+              "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+            done
+          else
+            echo "No timestamp tags to delete. Keeping the most recent $KEEP tags."
+          fi
+          echo "Timestamp-based old tags deleted successfully."
