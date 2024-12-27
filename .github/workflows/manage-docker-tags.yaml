@@ -58,7 +58,7 @@ jobs:
         KEEP=10
         echo "Deleting older tags..."
 
-        # Get the timestamp-based tags and sort them by creation date
+        # Get the timestamp-based tags and sort them by creation date (oldest first)
         TIMESTAMP_TAGS=()
         for TAG in "${TAGS[@]}"; do
           # Match timestamp-based tags like yyyyMMddHHmmss
@@ -69,6 +69,10 @@ jobs:
 
         # Sort timestamp-based tags by date (oldest first)
         if [ ${#TIMESTAMP_TAGS[@]} -gt $KEEP ]; then
+          # Sort tags by date (oldest first)
+          TIMESTAMP_TAGS=($(for TAG in "${TIMESTAMP_TAGS[@]}"; do echo $TAG; done | sort))
+          
+          # Delete tags if the count exceeds the "KEEP" limit
           for ((i=0; i<${#TIMESTAMP_TAGS[@]} - KEEP; i++)); do
             TAG=${TIMESTAMP_TAGS[$i]}
             echo "Deleting tag: $TAG"
