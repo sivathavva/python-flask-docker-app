@@ -1,58 +1,67 @@
-name: Print Number of Repositories and Tags Count
+name: Delete Old Docker Tags
 
 on:
-  workflow_dispatch: # Trigger manually
+  workflow_dispatch:
 
 jobs:
-  print_repos_and_tags:
+  delete-tags:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v2
+    # Step 1: Log in to Docker Hub
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+    # Step 2: Fetch Docker Image Tags from the repository
+    - name: Fetch Docker Image Tags
+      id: fetch_tags
+      run: |
+        IMAGE="${{ secrets.DOCKER_REPO }}"
+        TAGS_URL="https://hub.docker.com/v2/repositories/${IMAGE}/tags/"
+        echo "Fetching tags for $IMAGE..."
+        TAGS=()
+        NEXT_PAGE=$TAGS_URL
+        
+        while [ "$NEXT_PAGE" != "null" ]; do
+          RESPONSE=$(curl -s $NEXT_PAGE)
+          TAGS+=( $(echo "$RESPONSE" | grep -o '"name":"[^"]*' | sed 's/"name":"//') )
+          NEXT_PAGE=$(echo "$RESPONSE" | grep -o '"next":"[^"]*' | sed 's/"next":"//' | sed 's/\\"//g')
+          NEXT_PAGE=${NEXT_PAGE:-null}  # Handle null next page
+        done
+        echo "Found ${#TAGS[@]} tags"
+        echo "tags=${TAGS[*]}" >> $GITHUB_ENV
+        echo "tag_count=${#TAGS[@]}" >> $GITHUB_ENV
 
-      - name: Get List of Repositories
-        id: repos
-        run: |
-          # Fetch list of repositories for the user
-          REPOS=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/?page_size=100")
-          
-          # Parse the repository list
-          REPO_LIST=$(echo $REPOS | jq -r '.results[].name')
+    # Step 3: Delete Old Tags if Count Exceeds 10
+    - name: Delete Old Tags if Count Exceeds 10
+      if: env.tag_count > 10
+      run: |
+        IMAGE="${{ secrets.DOCKER_REPO }}"
+        TAGS=(${{ env.tags }})
+        KEEP=10
+        echo "Deleting older tags..."
 
-          # Print the list of repositories
-          echo "List of repositories:"
-          echo "$REPO_LIST"
+        # Get the timestamp-based tags and sort them by creation date
+        TIMESTAMP_TAGS=()
+        for TAG in "${TAGS[@]}"; do
+          # Match timestamp-based tags like yyyyMMddHHmmss
+          if [[ "$TAG" =~ ^[0-9]{8}[0-9]{6}$ ]]; then
+            TIMESTAMP_TAGS+=("$TAG")
+          fi
+        done
 
-          # Count the number of repositories
-          REPO_COUNT=$(echo "$REPO_LIST" | wc -l)
-          echo "Number of repositories: $REPO_COUNT"
-
-          # Output the repository list and count for later use in the workflow
-          echo "::set-output name=repos::$REPO_LIST"
-          echo "::set-output name=repo_count::$REPO_COUNT"
-
-      - name: Get Tags Count for Each Repository
-        run: |
-          REPO_LIST=${{ steps.repos.outputs.repos }}
-          
-          # Loop through each repository and get the tag count
-          for REPO in $REPO_LIST; do
-            echo "Fetching tags for repository: $REPO"
-            
-            # Fetch the tags for each repository
-            TAGS=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${REPO}/tags/list?page_size=100")
-            
-            # Parse the tag list and count them
-            TAG_LIST=$(echo $TAGS | jq -r '.results[].name')
-            TAG_COUNT=$(echo "$TAG_LIST" | wc -l)
-
-            # Print the number of tags for this repository
-            echo "Repository: $REPO, Number of tags: $TAG_COUNT"
+        # Sort timestamp-based tags by date (oldest first)
+        if [ ${#TIMESTAMP_TAGS[@]} -gt $KEEP ]; then
+          for ((i=0; i<${#TIMESTAMP_TAGS[@]} - KEEP; i++)); do
+            TAG=${TIMESTAMP_TAGS[$i]}
+            echo "Deleting tag: $TAG"
+            curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
+            "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
           done
+        else
+          echo "No tags to delete. Keeping the most recent $KEEP tags."
+        fi
+        echo "Old tags deleted successfully."
