@@ -1,13 +1,16 @@
-name: Manage Docker Hub Tags
+name: Fetch, Process, and Manage Docker Hub Tags
 
 on:
-  workflow_dispatch: # Allows manual trigger of the workflow
+  workflow_dispatch: # Allows manual triggering of the workflow
 
 jobs:
-  manage-tags:
+  fetch-and-manage-tags:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
     - name: Set up jq
       run: sudo apt-get install -y jq
 
@@ -18,39 +21,34 @@ jobs:
       run: |
         echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
-    - name: Fetch and Manage Docker Tags
+    - name: Fetch, Process, and Manage Docker Hub Tags
       env:
         DOCKER_REPO: ${{ secrets.DOCKER_REPO }}
         DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
         DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
       run: |
-        # Initialize pagination URL
         NEXT_URL="https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/"
-        ALL_TAGS=()
-
-        # Fetch all tags with pagination
+        > docker_tags_numbers.txt # Clear or create the file for numeric tags
         while [ "$NEXT_URL" != "null" ]; do
           RESPONSE=$(curl -u "$DOCKER_USERNAME:$DOCKER_PASSWORD" -s "$NEXT_URL")
-          TAGS=$(echo "$RESPONSE" | jq -r '.results[].name')
-          ALL_TAGS+=($TAGS)
+          
+          # Filter tags with numeric values and append them to the file
+          echo "$RESPONSE" | jq -r '.results[].name' | grep -E '^[0-9]+$' >> docker_tags_numbers.txt
+          
           NEXT_URL=$(echo "$RESPONSE" | jq -r '.next')
         done
 
-        # Calculate total tags and sort them
-        TOTAL_TAGS=${#ALL_TAGS[@]}
-        if [ $TOTAL_TAGS -gt 10 ]; then
-          echo "Total tags: $TOTAL_TAGS. Keeping the latest 10 and deleting the rest."
-          DELETE_COUNT=$((TOTAL_TAGS - 10))
+        # Sort numeric tags in descending order and keep the top 10
+        SORTED_TAGS=($(sort -nr docker_tags_numbers.txt))
+        KEEP_TAGS=(${SORTED_TAGS[@]:0:10})
+        echo "Tags to keep: ${KEEP_TAGS[@]}"
 
-          # Sort the tags (modify as needed for your tag naming convention)
-          SORTED_TAGS=($(printf '%s\n' "${ALL_TAGS[@]}" | sort))
+        # Identify and delete tags not in the top 10
+        for TAG in "${SORTED_TAGS[@]}"; do
+          if [[ ! " ${KEEP_TAGS[@]} " =~ " ${TAG} " ]]; then
+            echo "Deleting tag: $TAG"
+            curl -u "$DOCKER_USERNAME:$DOCKER_PASSWORD" -X DELETE "https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/$TAG/"
+          fi
+        done
 
-          # Delete the oldest tags
-          for ((i = 0; i < DELETE_COUNT; i++)); do
-            OLD_TAG=${SORTED_TAGS[i]}
-            echo "Deleting tag: $OLD_TAG"
-            curl -u "$DOCKER_USERNAME:$DOCKER_PASSWORD" -X DELETE "https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/$OLD_TAG/"
-          done
-        else
-          echo "Total tags ($TOTAL_TAGS) are within the limit. No deletion required."
-        fi
+        echo "Tag cleanup completed."
