@@ -1,83 +1,35 @@
-name: Delete Old Docker Tags
+name: Fetch Docker Hub Tags
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual triggering of the workflow
 
 jobs:
-  delete-tags:
-    runs-on: ubuntu-22.04  # You can change the version as per your requirement
+  fetch-tags:
+    runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Log in to Docker Hub
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+    - name: Checkout Repository
+      uses: actions/checkout@v3
 
-    # Step 2: Fetch Docker Image Tags from the repository
-    - name: Fetch Docker Image Tags
-      id: fetch_tags
+    - name: Set up jq
+      run: sudo apt-get install -y jq
+
+    - name: Authenticate with Docker Hub
+      env:
+        DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+        DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
       run: |
-        TAGS_URL="https://hub.docker.com/v2/repositories/sivathavva/python-app/tags/"
-        echo "Fetching tags for sivathavva/python-app ...."
+        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
-        # Initialize variables
-        TAGS=()
-        NEXT_PAGE=$TAGS_URL
-        UNIQUE_TAGS=()
-
-        # Fetch tags from all pages
-        while [ "$NEXT_PAGE" != "null" ]; do
-          RESPONSE=$(curl -s $NEXT_PAGE)
-
-          # Extract tags from the response and avoid duplicates
-          for TAG in $(echo "$RESPONSE" | grep -o '"name":"[^"]*' | sed 's/"name":"//'); do
-            if [[ ! " ${UNIQUE_TAGS[@]} " =~ " ${TAG} " ]]; then
-              UNIQUE_TAGS+=("$TAG")
-            fi
-          done
-
-          # Get the next page URL
-          NEXT_PAGE=$(echo "$RESPONSE" | grep -o '"next":"[^"]*' | sed 's/"next":"//' | sed 's/\\"//g')
-          NEXT_PAGE=${NEXT_PAGE:-null}  # Handle null next page
-        done
-
-        # Output the tags and tag count
-        echo "Found ${#UNIQUE_TAGS[@]} unique tags"
-        echo "tags=${UNIQUE_TAGS[*]}" >> $GITHUB_ENV
-        echo "tag_count=${#UNIQUE_TAGS[@]}" >> $GITHUB_ENV
-
-    # Step 3: Delete Old Tags if Age Exceeds 10 Days
-    - name: Delete Old Tags if Age Exceeds 10 Days
+    - name: Fetch Docker Hub Tags
+      env:
+        DOCKER_REPO: ${{ secrets.DOCKER_REPO }}
       run: |
-        IMAGE="sivathavva/python-app"
-        TAGS=(${{ env.tags }})
-        KEEP_DAYS=5
-        CURRENT_DATE=$(date +%Y%m%d%H%M%S)  # Get current date in YYYYMMDDHHMMSS format
-        CURRENT_TIMESTAMP=$(date -d "$CURRENT_DATE" +%s)  # Convert current date to Unix timestamp
-        echo "Deleting tags older than $KEEP_DAYS days..."
-
-        for TAG in "${TAGS[@]}"; do
-          # Check if tag follows the timestamp format YYYYMMDDHHMMSS
-          if [[ "$TAG" =~ ^[0-9]{14}$ ]]; then
-            TAG_TIMESTAMP=$TAG
-            TAG_DATE=$(date -d "$TAG_TIMESTAMP" +%s)  # Convert tag timestamp to Unix timestamp
-
-            # Calculate the age of the tag in days
-            AGE=$(( (CURRENT_TIMESTAMP - TAG_DATE) / 86400 ))  # 86400 seconds in a day
-
-            # If the tag is older than 10 days, delete it
-            if [ $AGE -gt $KEEP_DAYS ]; then
-              echo "Deleting tag: $TAG (Age: $AGE days)"
-              curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
-              "https://hub.docker.com/v2/repositories/sivathavva/python/tags/${TAG}/"
-            else
-              echo "Skipping tag: $TAG (Age: $AGE days)"
-            fi
-          else
-            echo "Skipping invalid tag: $TAG (Invalid format)"
-          fi
+        NEXT_URL="https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/"
+        > docker_tags.txt # Clear or create the file
+        while [ "$NEXT_URL" != "null" ]; do
+          RESPONSE=$(curl -u "$DOCKER_USERNAME:$DOCKER_PASSWORD" -s "$NEXT_URL")
+          echo "$RESPONSE" | jq -r '.results[].name' >> docker_tags.txt
+          NEXT_URL=$(echo "$RESPONSE" | jq -r '.next')
         done
-
-        echo "Old tags deletion completed."
+        cat docker_tags.txt # Optional: Print file content
