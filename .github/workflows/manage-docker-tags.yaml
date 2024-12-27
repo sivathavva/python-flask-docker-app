@@ -1,10 +1,10 @@
-name: Fetch Docker Tags Count
+name: Fetch Docker Tags Count with Pagination
 
 on:
   workflow_dispatch:
     inputs:
       image:
-        description: 'Docker image name'
+        description: 'sivathavva/python-app'
         required: true
         default: 'nginx'
 
@@ -19,12 +19,21 @@ jobs:
       - name: Set up jq
         run: sudo apt-get install -y jq
 
-      - name: Fetch Docker tags count
+      - name: Fetch Docker tags count with pagination
         run: |
           IMAGE_NAME="${{ github.event.inputs.image }}"
           echo "Fetching tags for Docker image: $IMAGE_NAME"
           
-          TAGS_JSON=$(curl -s "https://registry.hub.docker.com/v2/repositories/library/$IMAGE_NAME/tags")
-          TAG_COUNT=$(echo $TAGS_JSON | jq '.results | length')
+          # Initial request to get the first page of tags
+          TAGS_URL="https://registry.hub.docker.com/v2/repositories/library/$IMAGE_NAME/tags"
+          TAG_COUNT=0
           
-          echo "Number of tags available for $IMAGE_NAME: $TAG_COUNT"
+          # Loop through paginated responses
+          while [ ! -z "$TAGS_URL" ]; do
+            RESPONSE=$(curl -s "$TAGS_URL")
+            PAGE_TAG_COUNT=$(echo $RESPONSE | jq '.results | length')
+            TAG_COUNT=$((TAG_COUNT + PAGE_TAG_COUNT))
+            TAGS_URL=$(echo $RESPONSE | jq -r '.next')  # Get the next page URL
+          done
+          
+          echo "Total number of tags available for $IMAGE_NAME: $TAG_COUNT"
