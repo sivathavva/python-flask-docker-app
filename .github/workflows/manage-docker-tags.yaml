@@ -19,9 +19,8 @@ jobs:
     - name: Fetch Docker Image Tags
       id: fetch_tags
       run: |
-        IMAGE="${{ secrets.DOCKER_REPO }}"
-        TAGS_URL="https://hub.docker.com/v2/repositories/${IMAGE}/tags/"
-        echo "Fetching tags for $IMAGE..."
+        TAGS_URL="https://hub.docker.com/v2/repositories/sivathavva/python/tags/"
+        echo "Fetching tags for sivathavva/python ...."
 
         # Initialize variables
         TAGS=()
@@ -52,9 +51,9 @@ jobs:
     # Step 3: Delete Old Tags if Age Exceeds 10 Days
     - name: Delete Old Tags if Age Exceeds 10 Days
       run: |
-        IMAGE="${{ secrets.DOCKER_REPO }}"
+        IMAGE="sivathavva/python-app"
         TAGS=(${{ env.tags }})
-        KEEP_DAYS=10
+        KEEP_DAYS=5
         CURRENT_DATE=$(date +%Y%m%d%H%M%S)  # Get current date in YYYYMMDDHHMMSS format
         CURRENT_TIMESTAMP=$(date -d "$CURRENT_DATE" +%s)  # Convert current date to Unix timestamp
         echo "Deleting tags older than $KEEP_DAYS days..."
@@ -72,7 +71,7 @@ jobs:
             if [ $AGE -gt $KEEP_DAYS ]; then
               echo "Deleting tag: $TAG (Age: $AGE days)"
               curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
-              "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+              "https://hub.docker.com/v2/repositories/sivathavva/python/tags/${TAG}/"
             else
               echo "Skipping tag: $TAG (Age: $AGE days)"
             fi
