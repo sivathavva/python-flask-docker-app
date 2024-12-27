@@ -6,7 +6,7 @@ on:
       image:
         description: 'sivathavva/python-app'
         required: true
-        default: 'nginx'
+        default: 'sivathavva/python-app'
 
 jobs:
   fetch-tags:
