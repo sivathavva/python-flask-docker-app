@@ -5,7 +5,7 @@ on:
 
 jobs:
   delete-tags:
-    runs-on: ubuntu-22.04  # Change the Ubuntu version here
+    runs-on: ubuntu-22.04  # You can change the version as per your requirement
 
     steps:
     # Step 1: Log in to Docker Hub
@@ -49,37 +49,32 @@ jobs:
         echo "tags=${UNIQUE_TAGS[*]}" >> $GITHUB_ENV
         echo "tag_count=${#UNIQUE_TAGS[@]}" >> $GITHUB_ENV
 
-    # Step 3: Delete Old Tags if Count Exceeds 10
-    - name: Delete Old Tags if Count Exceeds 10
-      if: env.tag_count > 10
+    # Step 3: Delete Old Tags if Age Exceeds 10 Days
+    - name: Delete Old Tags if Age Exceeds 10 Days
       run: |
         IMAGE="${{ secrets.DOCKER_REPO }}"
         TAGS=(${{ env.tags }})
-        KEEP=10
-        echo "Deleting older tags..."
+        KEEP_DAYS=10
+        CURRENT_DATE=$(date +%Y%m%d%H%M%S)  # Get current date in YYYYMMDDHHMMSS format
+        CURRENT_TIMESTAMP=$(date -d "$CURRENT_DATE" +%s)  # Convert current date to Unix timestamp
+        echo "Deleting tags older than $KEEP_DAYS days..."
 
-        # Get the timestamp-based tags and sort them by creation date (oldest first)
-        TIMESTAMP_TAGS=()
         for TAG in "${TAGS[@]}"; do
-          # Match timestamp-based tags like yyyyMMddHHmmss
-          if [[ "$TAG" =~ ^[0-9]{8}[0-9]{6}$ ]]; then
-            TIMESTAMP_TAGS+=("$TAG")
+          # Check if tag follows the timestamp format YYYYMMDDHHMMSS
+          if [[ "$TAG" =~ ^[0-9]{14}$ ]]; then
+            TAG_TIMESTAMP=$TAG
+            TAG_DATE=$(date -d "$TAG_TIMESTAMP" +%s)  # Convert tag timestamp to Unix timestamp
+
+            # Calculate the age of the tag in days
+            AGE=$(( (CURRENT_TIMESTAMP - TAG_DATE) / 86400 ))  # 86400 seconds in a day
+
+            # If the tag is older than 10 days, delete it
+            if [ $AGE -gt $KEEP_DAYS ]; then
+              echo "Deleting tag: $TAG (Age: $AGE days)"
+              curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
+              "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
+            fi
           fi
         done
 
-        # Sort timestamp-based tags by date (oldest first)
-        if [ ${#TIMESTAMP_TAGS[@]} -gt $KEEP ]; then
-          # Sort tags by date (oldest first)
-          TIMESTAMP_TAGS=($(for TAG in "${TIMESTAMP_TAGS[@]}"; do echo $TAG; done | sort))
-          
-          # Delete tags if the count exceeds the "KEEP" limit
-          for ((i=0; i<${#TIMESTAMP_TAGS[@]} - KEEP; i++)); do
-            TAG=${TIMESTAMP_TAGS[$i]}
-            echo "Deleting tag: $TAG"
-            curl -X DELETE -u "${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }}" \
-            "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${TAG}/"
-          done
-        else
-          echo "No tags to delete. Keeping the most recent $KEEP tags."
-        fi
-        echo "Old tags deleted successfully."
+        echo "Old tags deletion completed."
