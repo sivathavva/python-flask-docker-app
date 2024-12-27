@@ -14,23 +14,23 @@ jobs:
     - name: Set up jq
       run: sudo apt-get install -y jq
 
-    - name: Authenticate with Docker Hub
+    - name: Authenticate with Docker Hub (Bearer Token)
       env:
         DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-        DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
       run: |
-        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+        echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
     - name: Fetch, Process, and Manage Docker Hub Tags
       env:
         DOCKER_REPO: ${{ secrets.DOCKER_REPO }}
         DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-        DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
       run: |
         NEXT_URL="https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/"
         > docker_tags_numbers.txt # Clear or create the file for numeric tags
         while [ "$NEXT_URL" != "null" ]; do
-          RESPONSE=$(curl -u "$DOCKER_USERNAME:$DOCKER_PASSWORD" -s "$NEXT_URL")
+          RESPONSE=$(curl -u "$DOCKER_USERNAME:$DOCKER_TOKEN" -s "$NEXT_URL")
           
           # Filter tags with numeric values and append them to the file
           echo "$RESPONSE" | jq -r '.results[].name' | grep -E '^[0-9]+$' >> docker_tags_numbers.txt
@@ -47,7 +47,7 @@ jobs:
         for TAG in "${SORTED_TAGS[@]}"; do
           if [[ ! " ${KEEP_TAGS[@]} " =~ " ${TAG} " ]]; then
             echo "Deleting tag: $TAG"
-            curl -u "$DOCKER_USERNAME:$DOCKER_PASSWORD" -X DELETE "https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/$TAG/"
+            curl -X DELETE "https://hub.docker.com/v2/repositories/${DOCKER_REPO}/tags/$TAG/" -H "Authorization: Bearer $DOCKER_TOKEN"
           fi
         done
 
