@@ -77,7 +77,7 @@ jobs:
               echo "Skipping tag: $TAG (Age: $AGE days)"
             fi
           else
-            echo "Skipping invalid tag format: $TAG"
+            echo "Skipping invalid tag: $TAG (Invalid format)"
           fi
         done
 
