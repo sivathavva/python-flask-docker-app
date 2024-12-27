@@ -1,39 +1,58 @@
-name: Fetch Docker Tags Count with Pagination
+name: Print Number of Repositories and Tags Count
 
 on:
-  workflow_dispatch:
-    inputs:
-      image:
-        description: 'sivathavva/python-app'
-        required: true
-        default: 'sivathavva/python-app'
+  workflow_dispatch: # Trigger manually
 
 jobs:
-  fetch-tags:
+  print_repos_and_tags:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v2
 
-      - name: Set up jq
-        run: sudo apt-get install -y jq
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Fetch Docker tags count with pagination
+      - name: Get List of Repositories
+        id: repos
         run: |
-          IMAGE_NAME="${{ github.event.inputs.image }}"
-          echo "Fetching tags for Docker image: $IMAGE_NAME"
+          # Fetch list of repositories for the user
+          REPOS=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/?page_size=100")
           
-          # Initial request to get the first page of tags
-          TAGS_URL="https://registry.hub.docker.com/v2/repositories/library/$IMAGE_NAME/tags"
-          TAG_COUNT=0
+          # Parse the repository list
+          REPO_LIST=$(echo $REPOS | jq -r '.results[].name')
+
+          # Print the list of repositories
+          echo "List of repositories:"
+          echo "$REPO_LIST"
+
+          # Count the number of repositories
+          REPO_COUNT=$(echo "$REPO_LIST" | wc -l)
+          echo "Number of repositories: $REPO_COUNT"
+
+          # Output the repository list and count for later use in the workflow
+          echo "::set-output name=repos::$REPO_LIST"
+          echo "::set-output name=repo_count::$REPO_COUNT"
+
+      - name: Get Tags Count for Each Repository
+        run: |
+          REPO_LIST=${{ steps.repos.outputs.repos }}
           
-          # Loop through paginated responses
-          while [ ! -z "$TAGS_URL" ]; do
-            RESPONSE=$(curl -s "$TAGS_URL")
-            PAGE_TAG_COUNT=$(echo $RESPONSE | jq '.results | length')
-            TAG_COUNT=$((TAG_COUNT + PAGE_TAG_COUNT))
-            TAGS_URL=$(echo $RESPONSE | jq -r '.next')  # Get the next page URL
+          # Loop through each repository and get the tag count
+          for REPO in $REPO_LIST; do
+            echo "Fetching tags for repository: $REPO"
+            
+            # Fetch the tags for each repository
+            TAGS=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/${REPO}/tags/list?page_size=100")
+            
+            # Parse the tag list and count them
+            TAG_LIST=$(echo $TAGS | jq -r '.results[].name')
+            TAG_COUNT=$(echo "$TAG_LIST" | wc -l)
+
+            # Print the number of tags for this repository
+            echo "Repository: $REPO, Number of tags: $TAG_COUNT"
           done
-          
-          echo "Total number of tags available for $IMAGE_NAME: $TAG_COUNT"
