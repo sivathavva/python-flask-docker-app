@@ -5,7 +5,7 @@ on:
 
 jobs:
   delete-tags:
-    runs-on: ubuntu-20.4
+    runs-on: ubuntu-22.04  # Change the Ubuntu version here
 
     steps:
     # Step 1: Log in to Docker Hub
