@@ -22,18 +22,32 @@ jobs:
         IMAGE="${{ secrets.DOCKER_REPO }}"
         TAGS_URL="https://hub.docker.com/v2/repositories/${IMAGE}/tags/"
         echo "Fetching tags for $IMAGE..."
+
+        # Initialize variables
         TAGS=()
         NEXT_PAGE=$TAGS_URL
-        
+        UNIQUE_TAGS=()
+
+        # Fetch tags from all pages
         while [ "$NEXT_PAGE" != "null" ]; do
           RESPONSE=$(curl -s $NEXT_PAGE)
-          TAGS+=( $(echo "$RESPONSE" | grep -o '"name":"[^"]*' | sed 's/"name":"//') )
+
+          # Extract tags from the response and avoid duplicates
+          for TAG in $(echo "$RESPONSE" | grep -o '"name":"[^"]*' | sed 's/"name":"//'); do
+            if [[ ! " ${UNIQUE_TAGS[@]} " =~ " ${TAG} " ]]; then
+              UNIQUE_TAGS+=("$TAG")
+            fi
+          done
+
+          # Get the next page URL
           NEXT_PAGE=$(echo "$RESPONSE" | grep -o '"next":"[^"]*' | sed 's/"next":"//' | sed 's/\\"//g')
           NEXT_PAGE=${NEXT_PAGE:-null}  # Handle null next page
         done
-        echo "Found ${#TAGS[@]} tags"
-        echo "tags=${TAGS[*]}" >> $GITHUB_ENV
-        echo "tag_count=${#TAGS[@]}" >> $GITHUB_ENV
+
+        # Output the tags and tag count
+        echo "Found ${#UNIQUE_TAGS[@]} unique tags"
+        echo "tags=${UNIQUE_TAGS[*]}" >> $GITHUB_ENV
+        echo "tag_count=${#UNIQUE_TAGS[@]}" >> $GITHUB_ENV
 
     # Step 3: Delete Old Tags if Count Exceeds 10
     - name: Delete Old Tags if Count Exceeds 10
